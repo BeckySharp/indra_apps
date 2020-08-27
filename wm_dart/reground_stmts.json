@@ -1,0 +1,11 @@
+[
+ {
+  "function": "reground_stmts",
+  "args": [
+   {
+    "function": "load_world_ontology"
+   },
+   "WM"
+  ]
+ }
+]

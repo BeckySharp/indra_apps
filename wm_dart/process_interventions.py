@@ -10,20 +10,21 @@ import requests
 from collections import defaultdict
 from datetime import datetime
 from indra.sources import eidos, hume, sofia, cwms
-from indra.sources.eidos import migration_table_processor
 from indra.tools.live_curation import Corpus
 from indra.tools import assemble_corpus as ac
 from indra.belief.wm_scorer import get_eidos_scorer
 from indra.preassembler.custom_preassembly import *
 from indra.statements import Event, Influence, Association
-from indra.ontology.world.ontology import load_world_ontology
+from indra.ontology.world import load_world_ontology
 
 import indra
 indra.logger.setLevel(logging.DEBUG)
 
 logger = logging.getLogger()
 #data_path = os.path.join(os.path.expanduser('~'), 'data', 'wm', 'dart')
-data_path = os.path.join('.', 'data')
+#data_path = os.path.join('.', 'data')
+data_path = os.path.join(os.path.sep, 'dart', 'data')
+
 
 wm_ont_url = ('https://raw.githubusercontent.com/WorldModelers/'
               'Ontologies/master/wm_with_flattened_interventions_metadata.yml')
@@ -31,7 +32,7 @@ wm_ont_url = ('https://raw.githubusercontent.com/WorldModelers/'
 
 def load_eidos(limit=None, cached=True):
     logger.info('Loading Eidos statements')
-    pkl_name = os.path.join(data_path, 'eidos', 'stmts_influence.pkl')
+    pkl_name = os.path.join(data_path, 'eidos', 'stmts_intervention.pkl')
     if cached:
         if os.path.exists(pkl_name):
             with open(pkl_name, 'rb') as fh:
@@ -54,7 +55,7 @@ def load_eidos(limit=None, cached=True):
 
 def load_hume(cached=True):
     logger.info('Loading Hume statements')
-    pkl_name = os.path.join(data_path, 'hume', 'stmts_influence.pkl')
+    pkl_name = os.path.join(data_path, 'hume', 'stmts_intervention.pkl')
     if cached:
         if os.path.exists(pkl_name):
             with open(pkl_name, 'rb') as fh:
@@ -62,12 +63,7 @@ def load_hume(cached=True):
                 logger.info(f'Loaded {len(stmts)} statements')
                 return stmts
     fnames = glob.glob(os.path.join(data_path, 'hume',
-                                    'wm_dart.101119.121619', '*.json-ld'))
-    fnames += glob.glob(os.path.join(data_path, 'hume',
-                                     'wm_factiva.121019.121619', '*.json-ld'))
-    fnames += glob.glob(os.path.join(data_path, 'hume',
-                                     'wm_luma.121019.121619', '*.json-ld'))
-
+                                    'wm_thanksgiving_intervention.030920', '*.json-ld'))
     stmts = []
     for fname in tqdm.tqdm(fnames):
         hp = hume.process_jsonld_file(fname)
@@ -417,31 +413,32 @@ def filter_out_long_words(stmts, k=10):
 
 
 if __name__ == '__main__':
-    world_ontology = load_world_ontology(wm_ont_url)
+    wm_ont = load_world_ontology(wm_ont_url)
+
     # Load all raw statements
     eidos_stmts = load_eidos()
+    eidos_stmts = ac.filter_by_type(eidos_stmts, Influence)
     hume_stmts = load_hume()
+    hume_stmts = ac.filter_by_type(hume_stmts, Influence)
     hume_stmts = remove_hume_redundant(hume_stmts, None)
-    sofia_stmts = load_sofia()
-    cwms_stmts = load_cwms()
+    #sofia_stmts = load_sofia()
+    #cwms_stmts = load_cwms()
 
     # Reground where needed
-    # sofia_stmts = reground_stmts(sofia_stmts, world_ontology,
-    #                              'WM')
-    # cwms_stmts = reground_stmts(cwms_stmts, world_ontology,
-    #                             'WM')
+    # sofia_stmts = reground_stmts(sofia_stmts, wm_ont, 'WM')
+    # cwms_stmts = reground_stmts(cwms_stmts, wm_ont, 'WM')
 
     # Put statements together and filter to influence
-    stmts = eidos_stmts + hume_stmts + sofia_stmts + cwms_stmts
-    stmts = ac.filter_by_type(stmts, Influence)
+    #stmts = eidos_stmts + hume_stmts + sofia_stmts + cwms_stmts
+    stmts = eidos_stmts + hume_stmts
     # Remove name spaces that aren't needed in CauseMos
     remove_namespaces(stmts, ['WHO', 'MITRE12', 'UN'])
 
     stmts = ac.filter_grounded_only(stmts, score_threshold=0.7)
-    stmts = filter_to_hume_interventions_only(stmts)
+    #stmts = filter_to_hume_interventions_only(stmts)
     # Filter again to remove any new top level groundings after
     # previous step.
-    stmts = ac.filter_grounded_only(stmts, score_threshold=0.7)
+    #stmts = ac.filter_grounded_only(stmts, score_threshold=0.7)
     stmts = filter_out_long_words(stmts, 10)
     stmts = filter_groundings(stmts)
     # Make sure we don't include context before 1900
@@ -452,10 +449,21 @@ if __name__ == '__main__':
 
     funs = {
         'grounding': (None, None),
-        'location': (location_matches, location_refinement),
-        'location_and_time': (location_time_matches,
-                              location_time_refinement)
+        #'location': (location_matches, location_refinement),
+        #'location_and_time': (location_time_matches,
+        #                      location_time_refinement)
     }
+
+    meta_data = {'description':
+       'This corpus was generated based on output '
+       'from Eidos and Hume before the 2020 Spring WM PI meeting '
+       'to assess the quality of intervention grounding.',
+       'readers': ['hume', 'eidos'],
+       'date': '2020-03-13',
+       'assembly': {
+           'level': None,
+           'grounding_threshold': 0.7,
+           }}
 
     for key, (matches_fun, refinement_fun) in funs.items():
         assembled_stmts = ac.run_preassembly(stmts,
@@ -465,14 +473,16 @@ if __name__ == '__main__':
                                              normalize_equivalences=True,
                                              normalize_opposites=True,
                                              normalize_ns='WM',
-                                             ontology=world_ontology,
+                                             ontology=wm_ont,
                                              return_toplevel=False,
                                              poolsize=16)
         print_statistics(assembled_stmts)
         remove_raw_grounding(assembled_stmts)
-        corpus_name = 'dart-20200104-stmts-%s' % key
-        corpus = Corpus(corpus_name, assembled_stmts, raw_statements=stmts)
-        corpus.s3_put()
+        corpus = Corpus(assembled_stmts, raw_statements=stmts,
+                        meta_data=meta_data)
+        corpus_name = 'dart-20200313-interventions-%s' % key
+        corpus.s3_put(corpus_name)
+        meta_data['assembly']['level'] = key
         sj = stmts_to_json(assembled_stmts, matches_fun=matches_fun)
         with open(os.path.join(data_path, corpus_name + '.json'), 'w') as fh:
             json.dump(sj, fh, indent=1)

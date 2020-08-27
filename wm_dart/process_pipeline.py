@@ -10,28 +10,28 @@ import requests
 from collections import defaultdict
 from datetime import datetime
 from indra.sources import eidos, hume, sofia, cwms
-from indra.sources.eidos import migration_table_processor
 from indra.tools.live_curation import Corpus
 from indra.tools import assemble_corpus as ac
-from indra.belief.wm_scorer import get_eidos_scorer
 from indra.preassembler.custom_preassembly import *
 from indra.statements import Event, Influence, Association
-from indra.ontology.world.ontology import load_world_ontology
+from indra.pipeline import AssemblyPipeline, register_pipeline
 
 import indra
 indra.logger.setLevel(logging.DEBUG)
 
 logger = logging.getLogger()
-#data_path = os.path.join(os.path.expanduser('~'), 'data', 'wm', 'dart')
-data_path = os.path.join('.', 'data')
+data_path = os.path.join(os.path.expanduser('~'), 'data', 'wm', 'dart')
+# data_path = os.path.join('.', 'data')
 
 wm_ont_url = ('https://raw.githubusercontent.com/WorldModelers/'
               'Ontologies/master/wm_with_flattened_interventions_metadata.yml')
 
+register_pipeline(datetime)
+
 
 def load_eidos(limit=None, cached=True):
     logger.info('Loading Eidos statements')
-    pkl_name = os.path.join(data_path, 'eidos', 'stmts_influence.pkl')
+    pkl_name = os.path.join(data_path, 'eidos', 'stmts.pkl')
     if cached:
         if os.path.exists(pkl_name):
             with open(pkl_name, 'rb') as fh:
@@ -148,14 +148,17 @@ def load_sofia(cached=True):
     return stmts
 
 
+@register_pipeline
 def fix_provenance(stmts, doc_id):
     """Move the document identifiers in evidences."""
     for stmt in stmts:
         for ev in stmt.evidence:
             prov = ev.annotations['provenance'][0]['document']
             prov['@id'] = doc_id
+    return stmts
 
 
+@register_pipeline
 def remove_namespaces(stmts, namespaces):
     """Remove unnecessary namespaces from Concept grounding."""
     logger.info('Removing unnecessary namespaces')
@@ -165,8 +168,10 @@ def remove_namespaces(stmts, namespaces):
                 if namespace in copy.deepcopy(agent.db_refs):
                     agent.db_refs.pop(namespace, None)
     logger.info('Finished removing unnecessary namespaces')
+    return stmts
 
 
+@register_pipeline
 def remove_raw_grounding(stmts):
     """Remove the raw_grounding annotation to decrease output size."""
     for stmt in stmts:
@@ -178,8 +183,10 @@ def remove_raw_grounding(stmts):
                 continue
             if 'raw_grounding' in agents:
                 agents.pop('raw_grounding', None)
+    return stmts
 
 
+@register_pipeline
 def get_events(stmts):
     """Return a list of all standalone events from a list of statements."""
     events = []
@@ -204,11 +211,13 @@ def get_events(stmts):
     return events
 
 
+@register_pipeline
 def get_non_events(stmts):
     """Return a list of statements that aren't Events"""
     return [st for st in stmts if not isinstance(st, Event)]
 
 
+@register_pipeline
 def check_event_context(events):
     for event in events:
         if not event.context and event.evidence[0].context:
@@ -218,6 +227,7 @@ def check_event_context(events):
             assert False, ('Event context issue', event, event.evidence)
 
 
+@register_pipeline
 def reground_stmts(stmts, ont_manager, namespace, eidos_reader=None,
                    overwrite=True, port=6666):
     logger.info(f'Regrounding {len(stmts)} statements')
@@ -254,6 +264,7 @@ def reground_stmts(stmts, ont_manager, namespace, eidos_reader=None,
     return stmts
 
 
+@register_pipeline
 def remove_hume_redundant(stmts, matches_fun):
     logger.info(f'Removing Hume redundancies on {len(stmts)} statements.')
     raw_stmt_groups = defaultdict(list)
@@ -269,6 +280,7 @@ def remove_hume_redundant(stmts, matches_fun):
     return new_stmts
 
 
+@register_pipeline
 def fix_wm_ontology(stmts):
     for stmt in stmts:
         for concept in stmt.agent_list():
@@ -278,11 +290,13 @@ def fix_wm_ontology(stmts):
                                          concept.db_refs['WM']]
 
 
+@register_pipeline
 def print_statistics(stmts):
     ev_tot = sum([len(stmt.evidence) for stmt in stmts])
     logger.info(f'Total evidence {ev_tot} for {len(stmts)} statements.')
 
 
+@register_pipeline
 def print_grounding_statistics(stmts, limit=None):
     groundings = defaultdict(int)
     for stmt in stmts:
@@ -298,6 +312,7 @@ def print_grounding_statistics(stmts, limit=None):
         logger.info(f'{grounding} : {count}')
 
 
+@register_pipeline
 def print_document_statistics(stmts):
     doc_ids = set()
     for stmt in stmts:
@@ -308,6 +323,7 @@ def print_document_statistics(stmts):
         f'Extracted {len(stmts)} statements from {len(doc_ids)} documents')
 
 
+@register_pipeline
 def filter_context_date(stmts, from_date=None, to_date=None):
     logger.info(f'Filtering dates on {len(stmts)} statements')
     if not from_date and not to_date:
@@ -339,6 +355,7 @@ def filter_context_date(stmts, from_date=None, to_date=None):
     return new_stmts
 
 
+@register_pipeline
 def filter_groundings(stmts):
     with open('groundings_to_exclude.txt', 'r') as f: 
         groundings_to_exclude = [l.strip() for l in f.readlines()]
@@ -347,6 +364,7 @@ def filter_groundings(stmts):
     return stmts
 
 
+@register_pipeline
 def set_positive_polarities(stmts):
     for stmt in stmts:
         if isinstance(stmt, Influence):
@@ -356,6 +374,7 @@ def set_positive_polarities(stmts):
     return stmts
 
 
+@register_pipeline
 def filter_to_hume_interventions_only(stmts):
     def get_grounding(ag):
         wmg = ag.concept.db_refs['WM'][0]
@@ -393,6 +412,7 @@ def filter_to_hume_interventions_only(stmts):
     return stmts
 
 
+@register_pipeline
 def filter_out_long_words(stmts, k=10):
     logger.info(f'Filtering to concepts with max {k} words on {len(stmts)}'
                 f' statements.')
@@ -417,62 +437,39 @@ def filter_out_long_words(stmts, k=10):
 
 
 if __name__ == '__main__':
-    world_ontology = load_world_ontology(wm_ont_url)
     # Load all raw statements
     eidos_stmts = load_eidos()
     hume_stmts = load_hume()
-    hume_stmts = remove_hume_redundant(hume_stmts, None)
     sofia_stmts = load_sofia()
     cwms_stmts = load_cwms()
 
+    hume_ap = AssemblyPipeline.from_json_file('hume_redundant.json')
+    hume_stmts = hume_ap.run(hume_stmts)
+
     # Reground where needed
-    # sofia_stmts = reground_stmts(sofia_stmts, world_ontology,
-    #                              'WM')
-    # cwms_stmts = reground_stmts(cwms_stmts, world_ontology,
-    #                             'WM')
+    reground_ap = AssemblyPipeline.from_json_file('reground_stmts.json')
+    sofia_stmts = reground_ap.run(sofia_stmts)
+    cwms_stmts = reground_ap.run(cwms_stmts)
 
-    # Put statements together and filter to influence
+    # Run shared assembly steps
     stmts = eidos_stmts + hume_stmts + sofia_stmts + cwms_stmts
-    stmts = ac.filter_by_type(stmts, Influence)
-    # Remove name spaces that aren't needed in CauseMos
-    remove_namespaces(stmts, ['WHO', 'MITRE12', 'UN'])
-
-    stmts = ac.filter_grounded_only(stmts, score_threshold=0.7)
-    stmts = filter_to_hume_interventions_only(stmts)
-    # Filter again to remove any new top level groundings after
-    # previous step.
-    stmts = ac.filter_grounded_only(stmts, score_threshold=0.7)
-    stmts = filter_out_long_words(stmts, 10)
-    stmts = filter_groundings(stmts)
-    # Make sure we don't include context before 1900
-    stmts = filter_context_date(stmts, from_date=datetime(1900, 1, 1))
-    stmts = set_positive_polarities(stmts)
-
-    scorer = get_eidos_scorer()
+    ap = AssemblyPipeline.from_json_file('assembly_steps.json')
+    stmts = ap.run(stmts)
 
     funs = {
-        'grounding': (None, None),
-        'location': (location_matches, location_refinement),
-        'location_and_time': (location_time_matches,
-                              location_time_refinement)
+        'grounding': None,
+        'location': location_matches,
+        'location_and_time': location_time_matches
     }
 
-    for key, (matches_fun, refinement_fun) in funs.items():
-        assembled_stmts = ac.run_preassembly(stmts,
-                                             belief_scorer=scorer,
-                                             matches_fun=matches_fun,
-                                             refinement_fun=refinement_fun,
-                                             normalize_equivalences=True,
-                                             normalize_opposites=True,
-                                             normalize_ns='WM',
-                                             ontology=world_ontology,
-                                             return_toplevel=False,
-                                             poolsize=16)
+    for key, matches_fun in funs.items():
+        fname = 'preassembly_%s.json' % key
+        preassembly_ap = AssemblyPipeline.from_json_file(fname)
+        assembled_stmts = preassembly_ap.run(stmts)
         print_statistics(assembled_stmts)
-        remove_raw_grounding(assembled_stmts)
-        corpus_name = 'dart-20200104-stmts-%s' % key
-        corpus = Corpus(corpus_name, assembled_stmts, raw_statements=stmts)
-        corpus.s3_put()
+        corpus = Corpus(assembled_stmts, raw_statements=stmts)
+        corpus_name = 'dart-pipeline-stmts-%s' % key
+        # corpus.s3_put(corpus_name)
         sj = stmts_to_json(assembled_stmts, matches_fun=matches_fun)
         with open(os.path.join(data_path, corpus_name + '.json'), 'w') as fh:
             json.dump(sj, fh, indent=1)
